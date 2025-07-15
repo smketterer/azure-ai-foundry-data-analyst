@@ -11,3 +11,4 @@ wheels/
 
 # Project files
 .env
+*.png

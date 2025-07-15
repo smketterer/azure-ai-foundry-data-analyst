@@ -53,11 +53,18 @@ def main():
 
     # Process the message and execute code
     run = project_client.agents.runs.create_and_process(thread_id=thread.id, agent_id=agent.id)
+    print(f"Run finished with status: {run.status.value.upper()}\n")
 
-    # Handle output files and annotations
+    if run.status == "failed":
+        # Log the error if the run fails
+        print(f"Run failed: {run.last_error}")
+    
+    # Fetch and print all messages
     messages = project_client.agents.messages.list(thread_id=thread.id)
-
     for msg in messages:
+        for content in msg.content:
+            if content.type == "text":
+                print(f"{msg.role.value.upper()}: {content["text"]["value"]}\n")
         # Save every image file in the message and upload to blob storage
         for img in msg.image_contents:
             file_id = img.image_file.file_id
@@ -66,7 +73,7 @@ def main():
             print(f"Saved image file to: {Path.cwd() / file_name}")
             with open(f"{Path.cwd() / file_name}", "rb") as data:
                 storage_container_client.upload_blob(name=file_name, data=data, overwrite=True)
-            print("Uploaded to blob storage.")
+            print("Uploaded to blob storage.\n")
 
     # Clean up resources
     project_client.agents.files.delete(file.id)
