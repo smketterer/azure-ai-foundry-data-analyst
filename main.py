@@ -170,7 +170,9 @@ def main():
         download_url = upload_and_link(local_path, safe_name)
         print(f"{_label(MAGENTA, 'Download (24h):')} {download_url}\n")
 
-    def run_phase(label: str, color: str, input_text: str, download_files: bool) -> str:
+    def run_phase(
+        label: str, color: str, input_text: str, download_files: bool
+    ) -> tuple[str, list[tuple[str, str, str]]]:
         print(f"{_label(color, f'[{label}]')}")
         response = openai.responses.create(
             conversation=conversation.id,
@@ -178,6 +180,7 @@ def main():
             extra_body={"agent_reference": {"name": agent.name, "type": "agent_reference"}},
         )
         text_chunks: list[str] = []
+        citations: list[tuple[str, str, str]] = []
         for item in response.output:
             if getattr(item, "type", None) != "message":
                 continue
@@ -186,11 +189,12 @@ def main():
                     continue
                 print(content.text + "\n")
                 text_chunks.append(content.text)
-                if download_files:
-                    for ann in content.annotations or []:
-                        if getattr(ann, "type", None) == "container_file_citation":
+                for ann in content.annotations or []:
+                    if getattr(ann, "type", None) == "container_file_citation":
+                        citations.append((ann.container_id, ann.file_id, ann.filename))
+                        if download_files:
                             download_and_link(ann.container_id, ann.file_id, ann.filename)
-        return "\n".join(text_chunks)
+        return "\n".join(text_chunks), citations
 
     def run_turn(user_prompt: str, with_file_note: bool) -> None:
         full_prompt = user_prompt + (file_note if with_file_note else "")
@@ -200,14 +204,20 @@ def main():
             run_phase("ASSISTANT", GREEN, full_prompt, download_files=True)
             return
 
-        # REPL: plan -> execute -> critique -> (maybe) revise -> final
-        # Only the final phase downloads/saves artifacts.
+        # REPL: plan -> execute -> critique -> (maybe) revise -> final.
+        # Artifacts are saved only after the final phase, using citations from
+        # the latest artifact-producing phase (revise if it ran, else execute).
         run_phase("PLAN", BLUE, PLAN_PREFIX + full_prompt, download_files=False)
-        run_phase("EXECUTE", GREEN, EXECUTE_PREFIX, download_files=False)
-        critique = run_phase("CRITIQUE", YELLOW, CRITIQUE_PREFIX, download_files=False)
+        _, execute_citations = run_phase("EXECUTE", GREEN, EXECUTE_PREFIX, download_files=False)
+        critique, _ = run_phase("CRITIQUE", YELLOW, CRITIQUE_PREFIX, download_files=False)
+        final_citations = execute_citations
         if "no revisions needed" not in critique.lower():
-            run_phase("REVISE", MAGENTA, REVISE_PREFIX, download_files=False)
-        run_phase("FINAL", GREEN, FINAL_PREFIX, download_files=True)
+            _, revise_citations = run_phase("REVISE", MAGENTA, REVISE_PREFIX, download_files=False)
+            if revise_citations:
+                final_citations = revise_citations
+        run_phase("FINAL", GREEN, FINAL_PREFIX, download_files=False)
+        for container_id, file_id, filename in final_citations:
+            download_and_link(container_id, file_id, filename)
 
     try:
         if args.mode == "oneshot":
