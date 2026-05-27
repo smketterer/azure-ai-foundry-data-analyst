@@ -119,8 +119,16 @@ def main():
 
     # Walk the response output: print assistant text, then download any
     # container_file_citation files (PNG charts, CSVs, etc.) referenced in annotations.
+    input_file_ids = {f.id for f in uploaded_files}
+    container_ids: set[str] = set()
     for item in response.output:
-        if getattr(item, "type", None) != "message":
+        item_type = getattr(item, "type", None)
+        if item_type == "code_interpreter_call":
+            container_id = getattr(item, "container_id", None)
+            if container_id:
+                container_ids.add(container_id)
+            continue
+        if item_type != "message":
             continue
         for content in item.content or []:
             if getattr(content, "type", None) != "output_text":
@@ -128,7 +136,17 @@ def main():
             print(f"ASSISTANT: {content.text}\n")
             for ann in content.annotations or []:
                 if getattr(ann, "type", None) == "container_file_citation":
+                    container_ids.add(ann.container_id)
                     download_and_link(ann.container_id, ann.file_id, ann.filename)
+
+    # Fallback: enumerate every file in each container touched by this run and
+    # download anything not already pulled in via citations (skipping input CSVs).
+    for container_id in container_ids:
+        for cf in openai.containers.files.list(container_id=container_id).data:
+            if cf.id in saved_file_ids or cf.id in input_file_ids:
+                continue
+            filename = getattr(cf, "path", None) or getattr(cf, "filename", None) or cf.id
+            download_and_link(container_id, cf.id, filename)
 
     # Clean up
     for f in uploaded_files:
