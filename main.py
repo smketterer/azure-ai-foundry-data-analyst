@@ -14,6 +14,18 @@ from azure.identity import DefaultAzureCredential
 
 from azure.storage.blob import BlobSasPermissions, BlobServiceClient, generate_blob_sas
 
+BOLD = "\033[1m"
+DIM = "\033[2m"
+RESET = "\033[0m"
+CYAN = "\033[36m"
+GREEN = "\033[32m"
+YELLOW = "\033[33m"
+MAGENTA = "\033[35m"
+
+
+def _label(color: str, text: str) -> str:
+    return f"{BOLD}{color}{text}{RESET}"
+
 
 def main():
     load_dotenv()
@@ -85,7 +97,8 @@ def main():
         extra_body={"agent_reference": {"name": agent.name, "type": "agent_reference"}},
     )
 
-    print(f"Response status: {response.status.upper()}\n")
+    print(f"{_label(YELLOW, 'Status:')} {response.status.upper()}\n")
+    print(f"{_label(CYAN, '[USER]')}\n{prompt_with_files}\n")
 
     def upload_and_link(local_path: Path, blob_name: str) -> str:
         with open(local_path, "rb") as data:
@@ -113,40 +126,22 @@ def main():
         )
         with open(local_path, "wb") as f:
             f.write(file_content.read())
-        print(f"Saved output file to: {local_path}")
+        print(f"{_label(MAGENTA, 'Saved:')} {local_path}")
         download_url = upload_and_link(local_path, safe_name)
-        print(f"Download URL (24h): {download_url}\n")
+        print(f"{_label(MAGENTA, 'Download (24h):')} {download_url}\n")
 
     # Walk the response output: print assistant text, then download any
     # container_file_citation files (PNG charts, CSVs, etc.) referenced in annotations.
-    input_file_ids = {f.id for f in uploaded_files}
-    container_ids: set[str] = set()
     for item in response.output:
-        item_type = getattr(item, "type", None)
-        if item_type == "code_interpreter_call":
-            container_id = getattr(item, "container_id", None)
-            if container_id:
-                container_ids.add(container_id)
-            continue
-        if item_type != "message":
+        if getattr(item, "type", None) != "message":
             continue
         for content in item.content or []:
             if getattr(content, "type", None) != "output_text":
                 continue
-            print(f"ASSISTANT: {content.text}\n")
+            print(f"{_label(GREEN, '[ASSISTANT]')}\n{content.text}\n")
             for ann in content.annotations or []:
                 if getattr(ann, "type", None) == "container_file_citation":
-                    container_ids.add(ann.container_id)
                     download_and_link(ann.container_id, ann.file_id, ann.filename)
-
-    # Fallback: enumerate every file in each container touched by this run and
-    # download anything not already pulled in via citations (skipping input CSVs).
-    for container_id in container_ids:
-        for cf in openai.containers.files.list(container_id=container_id).data:
-            if cf.id in saved_file_ids or cf.id in input_file_ids:
-                continue
-            filename = getattr(cf, "path", None) or getattr(cf, "filename", None) or cf.id
-            download_and_link(container_id, cf.id, filename)
 
     # Clean up
     for f in uploaded_files:
